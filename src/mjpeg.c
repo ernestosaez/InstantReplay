@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <errno.h>
 
 int running;
 
@@ -87,7 +88,7 @@ void *accept_thread (void *s) {
 
   	int ssock;
   	char shortBuf [1500];
-  	char buf [150000];
+  	char buf [500000];
   	char *p;
   	char name [100];
   	char filename [200];
@@ -100,7 +101,6 @@ void *accept_thread (void *s) {
 	struct timeval tv;
 	long now;
 	long last;
-	int header_sent=0;
 	int copied=0;
 	struct stat status;
 
@@ -112,16 +112,16 @@ void *accept_thread (void *s) {
 		buf[ret]='\0';
 		if ((p=strstr(buf,"GET /screen"))) {
 
-			sprintf (filename,"/mnt/%s",p+5);
+			sprintf (filename,"/mnt/streams/%s",p+5);
 			if ((p=strchr(filename,' '))) {
 				*p='\0';
 			}
 			printf ("filename %s\n",filename);
 
-			sprintf (boundary,"asdfghjklqwertyQVADIS1234567890");
-			sprintf(shortBuf,"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: multipart/mixed; boundary=%s\r\n\r\n",boundary);
+			sprintf (boundary,"asdfghjklqwertyCloudPowder1234567890");
+			sprintf(shortBuf,"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: multipart/mixed; boundary=%s\r\n\r\n--%s\r\n",boundary,boundary);
 			send(ssock, (char *)shortBuf, strlen (shortBuf), 0);
-			header_sent=1;
+			printf ("sent %s\n",shortBuf);
 
 			while (running && !e) {
 
@@ -132,31 +132,41 @@ void *accept_thread (void *s) {
             				}
             				fclose (FI);
         			}
+				if (copied < 2 || (buf[copied-2]&0xFF)!=0xFF || (buf[copied-1]&0xFF)!=0xD9) {
+					usleep(2000);
+					continue;
+				}
+
+				printf ("copied %d last %02X %02X \n",copied,buf[copied-2]&0xFF,buf[copied-1]&0xFF);
 
 				sprintf(shortBuf,"Content-type: image/jpeg\r\nAccess-Control-Allow-Origin: *\r\nContent-length: %d\r\n\r\n",copied);
 				if ((ret=send(ssock, (char *)shortBuf, strlen (shortBuf), MSG_NOSIGNAL ))>0) {
-					//printf ("copied %d\n",copied);
+					printf ("sent %s\n",shortBuf);
 				 	int sent=0;
 					while (sent < copied) {
-						if ((ret=send(ssock, (char *)(buf+sent), ((copied-sent>15000)?15000:(copied-sent)), 0))<=0) {
+						if ((ret=send(ssock, (char *)(buf+sent), ((copied-sent>1500)?1500:(copied-sent)), MSG_NOSIGNAL))<=0) {
+							printf ("ret %d errno %d\n",ret,errno);
 							e=1;
 							break;
 						} 
 						sent+=ret;
-				//		printf ("sent %d\n",sent);
+						printf ("sent %d copied %d\n",sent,copied);
 					}
+					sprintf (shortBuf,"--%s\r\n",boundary);
+					if ((ret=send(ssock, (char *)shortBuf, strlen (shortBuf), MSG_NOSIGNAL))<=0) {
+						e=2;
+					} 
+					printf ("sent %s\n",shortBuf);
 				}
 				else {
+					printf ("ret %d errno %d - %s\n",ret,errno,strerror(errno));
 					e=3;
 				}
-				sprintf (shortBuf,"--%s\r\n",boundary);
-				if ((ret=send(ssock, (char *)shortBuf, strlen (shortBuf), MSG_NOSIGNAL))<=0) {
-					e=2;
-				} 
 				msleep (1000/25); // msleep uses nanosleep but the parameter is in ms
 			} // end of while
 		} //enf of if GET
 	}
+	printf ("Error e=%d\n",e);
 
 	if (ssock) {
 		strcpy(shortBuf,"");
@@ -220,7 +230,8 @@ int main (int argc,char *argv[]) {
 	rsock = socket(AF_INET, SOCK_STREAM, 0);
 	sin.sin_family = AF_INET;
 	sin.sin_port = htons(8000);
-	sin.sin_addr.s_addr = inet_addr("127.0.0.1");
+	//sin.sin_addr.s_addr = inet_addr("127.0.0.1");
+	sin.sin_addr.s_addr = INADDR_ANY;
 	setsockopt(rsock, SOL_SOCKET, SO_REUSEADDR, (char *)&yes, sizeof(long));
 
 	if (bind(rsock, (struct sockaddr *) &sin, sizeof(sin)) != 0) {
